@@ -4,12 +4,32 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createCakes, type CakeSpec } from "./cakes";
 import { createAtmosphere } from "./atmosphere";
 import { makeRadialTexture } from "./textures";
 import "./style.css";
 
 const DEBOUNCE_MS = 500;
+
+type CameraPose = {
+  fov: number;
+  position: readonly [number, number, number];
+  target: readonly [number, number, number];
+};
+
+function cameraPose(aspect: number, height: number): CameraPose {
+  const portrait = aspect < 0.92;
+  const short = height < 520;
+  if (portrait) {
+    // ~34° above the horizon: top surface, toppings, and side layers all read.
+    return { fov: 43, position: [0.62, 3.72, 5.19], target: [0, 0.2, 0] };
+  }
+  if (short) {
+    return { fov: 38, position: [0.7, 2.96, 4.8], target: [0, 0.16, 0] };
+  }
+  return { fov: 32, position: [1.05, 2.52, 3.8], target: [0, 0.24, 0] };
+}
 
 function main(): void {
   const canvas = document.querySelector<HTMLCanvasElement>("#scene");
@@ -38,8 +58,24 @@ function main(): void {
   pmrem.dispose();
 
   const camera = new THREE.PerspectiveCamera(33, 1, 0.1, 40);
-  const cameraBase = new THREE.Vector3();
-  const lookAt = new THREE.Vector3();
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.enablePan = false;
+  controls.enableZoom = true;
+  controls.zoomSpeed = 0.65;
+  controls.rotateSpeed = 0.85;
+  controls.minDistance = 3.4;
+  controls.maxDistance = 9.5;
+  controls.minPolarAngle = THREE.MathUtils.degToRad(18);
+  controls.maxPolarAngle = THREE.MathUtils.degToRad(82);
+  controls.touches.ONE = THREE.TOUCH.ROTATE;
+  controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
+
+  let userAdjusted = false;
+  controls.addEventListener("start", () => {
+    userAdjusted = true;
+  });
 
   scene.add(new THREE.AmbientLight(0xfff5fb, 0.12));
   const hemi = new THREE.HemisphereLight(0xc9d7ff, 0x1a0a12, 0.24);
@@ -172,8 +208,6 @@ function main(): void {
   function layout(): void {
     const { width, height } = viewSize();
     const aspect = width / height;
-    const portrait = aspect < 0.92;
-    const short = height < 520;
     const dprCap = Math.min(width, height) < 520 ? 1.5 : 2;
     const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
     renderer.setPixelRatio(dpr);
@@ -181,21 +215,15 @@ function main(): void {
     composer.setPixelRatio(dpr);
     composer.setSize(width, height);
     atmosphere.setPixelRatio(dpr);
+    const pose = cameraPose(aspect, height);
+    camera.fov = pose.fov;
     camera.aspect = aspect;
-    if (portrait) {
-      camera.fov = 43;
-      cameraBase.set(0.08, 1.42, 6.35);
-      lookAt.set(0, -0.02, 0);
-    } else if (short) {
-      camera.fov = 38;
-      cameraBase.set(0.22, 1.22, 5.7);
-      lookAt.set(0, 0.12, 0);
-    } else {
-      camera.fov = 32;
-      cameraBase.set(0.4, 1.68, 4.15);
-      lookAt.set(0, 0.02, 0);
-    }
     camera.updateProjectionMatrix();
+    if (!userAdjusted) {
+      camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
+      controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
+      controls.update();
+    }
   }
 
   function triggerFlash(): void {
@@ -246,7 +274,7 @@ function main(): void {
     cakeHolder.scale.setScalar(pop);
     cakeHolder.rotation.y = 0.22 + t * 0.12;
     centerpiece.rotation.z = Math.sin(t * 48) * 0.075 * shake;
-    centerpiece.rotation.x = -0.1 + Math.sin(t * 36) * 0.04 * shake;
+    centerpiece.rotation.x = Math.sin(t * 36) * 0.04 * shake;
     centerpiece.position.x = Math.sin(t * 54) * 0.06 * shake;
     centerpiece.position.y = -0.28 + Math.sin(t * 0.85) * 0.016 + Math.sin(t * 62) * 0.02 * shake;
     accent.intensity = 4.5 + shake * 8;
@@ -261,13 +289,16 @@ function main(): void {
       }
     });
 
-    camera.position.copy(cameraBase);
-    camera.position.x += Math.sin(t * 51) * 0.03 * shake;
-    camera.position.y += Math.cos(t * 47) * 0.02 * shake;
-    camera.lookAt(lookAt);
+    controls.update();
+    const shakeX = Math.sin(t * 51) * 0.03 * shake;
+    const shakeY = Math.cos(t * 47) * 0.02 * shake;
+    camera.position.x += shakeX;
+    camera.position.y += shakeY;
 
     atmosphere.update(t, dt);
     composer.render();
+    camera.position.x -= shakeX;
+    camera.position.y -= shakeY;
     requestAnimationFrame(frame);
   }
   frame();
